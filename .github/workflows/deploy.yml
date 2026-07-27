@@ -19,9 +19,9 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -37,22 +37,26 @@ jobs:
       # gates the deploy rather than just reporting.
       - name: Run cipher parity tests
         working-directory: frontend
-        env:
-          CI: true
         run: npm test -- --watchAll=false
 
       - name: Build
         working-directory: frontend
         run: npm run build
 
+      # Published with plain git rather than the gh-pages package: the branch
+      # holds generated output only, so it is rebuilt from scratch each time
+      # instead of accumulating history.
       - name: Publish to gh-pages
-        working-directory: frontend
+        working-directory: frontend/build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx gh-pages \
-            --dist build \
-            --dotfiles \
-            --user "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
-            --repo "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            --message "Deploy ${GITHUB_SHA}"
+          set -euo pipefail
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${GITHUB_SHA}"
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            HEAD:gh-pages
