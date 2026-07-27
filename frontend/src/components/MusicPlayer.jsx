@@ -233,14 +233,22 @@ class InstrumentalSynth {
   }
 
   playNote(note, duration, instrument = "piano", options = {}) {
-    const { interval = null } = options;
+    const {
+      interval = null,
+      release: releaseOverride = null,
+      volumeScale = 1,
+    } = options;
     const freq = noteToFrequency(note);
     const startTime = this.audioContext.currentTime;
 
     const instrumentConfig = INSTRUMENTS[instrument] || INSTRUMENTS.piano;
     let { waveform, attack, decay, sustain, release, volume } = instrumentConfig;
 
-    volume = volume * volumeForNote(note);
+    // A note that ends the piece has to fade over seconds, not over the fraction
+    // of one its instrument uses mid-phrase
+    if (releaseOverride !== null) release = releaseOverride;
+
+    volume = volume * volumeForNote(note) * volumeScale;
 
     // Movement dynamics: the further a note leaps from the one before it, the
     // louder it sits. Big leaps read as the melody, static/stepwise notes fall
@@ -287,6 +295,18 @@ class InstrumentalSynth {
     // envelope points out of order
     const releaseStartTime = Math.max(decayEndTime, endTime - release);
     gain.gain.setValueAtTime(volume * sustain, releaseStartTime);
+
+    if (releaseOverride !== null) {
+      // Over a fade this long a straight line reads as someone pulling a fader.
+      // A struck or bowed string sheds most of its energy early and then trails
+      // off, which is a curve - but an exponential can never reach zero, so drop
+      // the last inaudible fraction to silence.
+      gain.gain.exponentialRampToValueAtTime(
+        Math.max(volume * 0.001, 1e-4),
+        Math.max(releaseStartTime + 0.01, endTime - 0.02)
+      );
+    }
+
     gain.gain.linearRampToValueAtTime(0, endTime);
 
     osc.connect(gain);
@@ -332,7 +352,16 @@ class InstrumentalSynth {
     this.oscillators.push(osc, osc2);
     this.gains.push(gain);
 
-    this.addPartials(freq, playDuration, startTime, instrumentConfig, volume, voiceOutput);
+    // The overtones have to fade on the same schedule as the fundamental,
+    // otherwise a lengthened note trails off with its partials already gone
+    this.addPartials(
+      freq,
+      playDuration,
+      startTime,
+      { ...instrumentConfig, release },
+      volume,
+      voiceOutput
+    );
   }
 
   // Stack the overtones above a note. Each partial gets its own envelope so the
@@ -514,6 +543,100 @@ function soundingDuration(duration, instrument, interval) {
   return duration * CONSONANT_SUSTAIN;
 }
 
+// The piece used to stop the instant the last letter did. Two things end it
+// instead: the final note of each voice rings on rather than being cut off, and
+// the music lands on the tonic chord so the ear hears an arrival instead of an
+// interruption.
+//
+// This is playback only. The chord is appended after the encoded notes and
+// carries no character index, so it lights nothing up, and the note sequence the
+// UI shows - the thing that actually gets decoded - is untouched.
+const FINAL_RING = 1.6;
+const FINAL_RELEASE = 1.3;
+const CADENCE_GAP = 0.3;
+const CADENCE_RING = 3.4;
+const CADENCE_RELEASE = 3.0;
+
+// The chord is an arrival, not a punchline, so it sits below the melody it
+// follows rather than capping it off with three notes at full level.
+//
+// It is struck rather than rolled, and left on one instrument. Spreading it and
+// splitting it across the violin and piano was tried, on the theory that a block
+// triad is the one gesture with no precedent elsewhere in the piece - but a roll
+// is a performance, and it pulled focus harder than the plain chord it replaced.
+// Landing flat is what makes it read as an ending rather than a flourish.
+const CADENCE_VOLUME = 0.7;
+
+// Modes with a flattened third. The closing chord has to agree with the mode the
+// piece was written in, or the ending argues with the melody that led into it.
+const MINOR_THIRD_MODES = new Set(["minor", "dorian", "phrygian"]);
+
+// Written out in the same order as the pitch classes, so index is pitch class
+const PITCH_NAMES = Object.keys(PITCH_CLASSES);
+
+function midiToNote(midi) {
+  return `${PITCH_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+// The tonic triad, voiced at or just below the note the melody ended on so the
+// chord lands in the register the piece has been living in instead of jumping an
+// octave to get there.
+function tonicTriad(tonic, mode, anchorMidi) {
+  const pitchClass = PITCH_CLASSES[tonic];
+  if (pitchClass === undefined || anchorMidi === null) return [];
+
+  let root = pitchClass;
+  while (root + 12 <= anchorMidi) root += 12;
+
+  return [root, root + (MINOR_THIRD_MODES.has(mode) ? 3 : 4), root + 7];
+}
+
+// Give a finished schedule an ending. Both playback modes go through here.
+function withEnding(schedule, tonic, mode) {
+  const { events, totalTime } = schedule;
+  if (!events.length) return schedule;
+
+  // Whatever sounds last in each voice gets to ring. Without this a message
+  // ending on a vowel stops dead in a tenth of a second, because only the piano
+  // has its notes extended and the violin's release is that short.
+  const lastOfStream = new Map();
+  events.forEach(event => {
+    const current = lastOfStream.get(event.stream);
+    if (!current || event.startTime > current.startTime) {
+      lastOfStream.set(event.stream, event);
+    }
+  });
+
+  lastOfStream.forEach(event => {
+    event.duration = Math.max(event.duration, FINAL_RING);
+    event.release = FINAL_RELEASE;
+  });
+
+  const lastMelody = lastOfStream.get("melody");
+  const chordStart = totalTime + CADENCE_GAP;
+  const cadence = tonicTriad(
+    tonic,
+    mode,
+    noteToMidi(lastMelody ? lastMelody.note : null)
+  ).map(midi => ({
+    note: midiToNote(midi),
+    startTime: chordStart,
+    duration: CADENCE_RING,
+    instrument: "piano",
+    interval: null,
+    stream: "melody",
+    release: CADENCE_RELEASE,
+    volumeScale: CADENCE_VOLUME,
+  }));
+
+  // An unknown key leaves nothing to resolve to, but the notes can still ring
+  if (!cadence.length) {
+    return { events, totalTime: totalTime + FINAL_RING };
+  }
+
+  return { events: events.concat(cadence), totalTime: chordStart + CADENCE_RING };
+}
+
 // Flatten either playback mode into one list of scheduled events. Audio and
 // visuals both read from this, so what you see cannot drift from what you hear.
 function buildRegularSchedule(audioData) {
@@ -594,7 +717,14 @@ function buildHarmonicSchedule(audioData) {
   return { events, totalTime };
 }
 
-function MusicPlayer({ webAudioJson, noteCount, webAudioJsonHarmonic, originalText }) {
+function MusicPlayer({
+  webAudioJson,
+  noteCount,
+  webAudioJsonHarmonic,
+  originalText,
+  tonic,
+  mode,
+}) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [synth, setSynth] = useState(null);
   const [useHarmonic, setUseHarmonic] = useState(true);
@@ -706,10 +836,13 @@ function MusicPlayer({ webAudioJson, noteCount, webAudioJsonHarmonic, originalTe
 
     try {
       const audioData = JSON.parse(audioDataJson);
-      const schedule =
+      const schedule = withEnding(
         useHarmonic && audioData.harmony && audioData.melody
           ? buildHarmonicSchedule(audioData)
-          : buildRegularSchedule(audioData);
+          : buildRegularSchedule(audioData),
+        tonic,
+        mode
+      );
 
       if (schedule.events.length === 0) return;
 
@@ -721,6 +854,8 @@ function MusicPlayer({ webAudioJson, noteCount, webAudioJsonHarmonic, originalTe
         const timeout = setTimeout(() => {
           synth.playNote(event.note, event.duration, event.instrument, {
             interval: event.interval,
+            release: event.release,
+            volumeScale: event.volumeScale,
           });
         }, event.startTime * 1000);
         synth.addPendingTimeout(timeout);

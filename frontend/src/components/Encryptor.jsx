@@ -121,6 +121,8 @@ function Encryptor() {
                 webAudioJsonHarmonic={result.web_audio_json_harmonic}
                 noteCount={result.note_count}
                 originalText={result.original_text}
+                tonic={result.tonic}
+                mode={result.mode}
               />
             </div>
 
