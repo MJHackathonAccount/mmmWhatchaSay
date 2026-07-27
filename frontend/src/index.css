@@ -243,7 +243,7 @@ body {
 .input-group small {
   display: block;
   margin-top: 0.25rem;
-  color: #666;
+  color: rgba(240, 240, 240, 0.55);
   font-size: 0.85rem;
 }
 
@@ -436,15 +436,23 @@ details {
 
 details summary {
   font-weight: 600;
-  color: #667eea;
+  color: #a855f7;
   padding: 0.5rem;
-  background: white;
+  background: rgba(102, 126, 234, 0.15);
   border-radius: 4px;
-  border: 1px solid #ddd;
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  transition: all 0.3s ease;
+}
+
+details summary:hover {
+  background: rgba(102, 126, 234, 0.25);
+  border-color: rgba(168, 85, 247, 0.6);
+  color: #f093fb;
 }
 
 details[open] summary {
-  background: #f0f0f0;
+  background: rgba(102, 126, 234, 0.25);
+  margin-bottom: 0.75rem;
 }
 
 /* Error Messages */
@@ -555,21 +563,21 @@ details[open] summary {
   cursor: pointer;
   user-select: none;
   padding: 0.5rem 0.75rem;
-  background: #f5f5f5;
+  background: rgba(102, 126, 234, 0.15);
   border-radius: 4px;
-  border: 1px solid #ddd;
+  border: 1px solid rgba(168, 85, 247, 0.35);
   transition: all 0.3s ease;
 }
 
 .harmonic-toggle:hover input:not(:disabled) ~ span {
-  color: #667eea;
+  color: #f093fb;
 }
 
 .harmonic-toggle input {
   cursor: pointer;
   width: 18px;
   height: 18px;
-  accent-color: #667eea;
+  accent-color: #a855f7;
 }
 
 .harmonic-toggle input:disabled {
@@ -582,7 +590,7 @@ details[open] summary {
 }
 
 .player-info {
-  color: #666;
+  color: rgba(240, 240, 240, 0.7);
   font-size: 1rem;
   margin-top: 1rem;
 }
